@@ -79,7 +79,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="card suspected"><div class="num">{{ "%.1f"|format(suspected_pct) }}%</div><div class="lab">疑似 AI 占比</div></div>
     <div class="card human"><div class="num">{{ "%.1f"|format(human_pct) }}%</div><div class="lab">人工占比</div></div>
   </div>
-  <div class="tokens">朱雀 tokens：{{ zhuque_tokens }} ｜ Makers 计费 tokens：{{ makers_tokens }} ｜ jev tokens：{{ jev_tokens }}</div>
+  <div class="tokens">朱雀 tokens：{{ zhuque_tokens }} ｜ Makers 计费 tokens：{{ makers_tokens }} ｜ jev tokens：{{ jev_tokens }}{% if quota %}<br>本月免费额度：已用 {{ "{:,}".format(quota.used) }} / {{ "{:,}".format(quota.free) }} ({{ "%.2f"|format(quota.used_pct) }}%) · 剩余 {{ "{:,}".format(quota.remaining) }} ({{ "%.2f"|format(100 - quota.used_pct) }}%){% endif %}</div>
 
   <div class="legend">图例：<span class="badge ai">AI</span><span class="badge suspected">疑似AI</span><span class="badge human">人工</span><span class="badge none">未检测</span></div>
 
@@ -184,6 +184,7 @@ def _html_view(report: DetectionReport) -> dict:
         "zhuque_tokens": report.zhuque_tokens,
         "makers_tokens": report.makers_tokens,
         "jev_tokens": report.jev_tokens,
+        "quota": report.extras.get("quota"),
         "detected_count": sum(1 for r in report.paragraphs if r.label is not None),
         "total_count": len(report.paragraphs),
         "paragraphs": paragraphs,

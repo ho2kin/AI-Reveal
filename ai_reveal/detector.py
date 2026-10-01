@@ -104,7 +104,21 @@ def run_detection(paragraphs: list[Paragraph], chunks: list[Chunk],
         report.paragraphs.append(result)
 
     _compute_ratios(report)
+    _warn_unmapped(report, chunks)
     return report
+
+
+def _warn_unmapped(report: DetectionReport, chunks: list[Chunk]) -> None:
+    """有段落未拿到标注时显式提示，避免整体占比被误读为全量结果."""
+    covered = {idx for chunk in chunks for idx in chunk.paragraph_indices}
+    unmatched = [r.paragraph.index for r in report.paragraphs
+                 if r.paragraph.index in covered and r.label is None]
+    if unmatched:
+        preview = ", ".join(f"#{i}" for i in unmatched[:10])
+        more = f" 等 {len(unmatched)} 段" if len(unmatched) > 10 else ""
+        report.warnings.append(
+            f"{preview}{more} 未能映射到检测结果（API 标注与文本偏移不一致），"
+            "整体占比仅基于已检测段落，建议重试或反馈")
 
 
 def _collect_chunk(data: dict, chunk: Chunk,
@@ -139,24 +153,40 @@ def _collect_chunk(data: dict, chunk: Chunk,
 
 
 def _map_segment(seg: dict, chunk: Chunk) -> list[tuple[int, int]]:
-    """把一个 segment 的 position 区间映射到与其重叠的所有段落，返回 (段落, 重叠长度).
+    """把一个 segment 映射到与其重叠的所有段落，返回 (段落, 重叠长度).
 
-    朱雀对短文本会返回覆盖整块的单一 segment，按重叠长度分摊到各段落。
+    朱雀 position 语义为 [起始偏移, 长度]（实测校准，非 [起, 止]）；
+    其切分为句子级、与段落边界不重合，按重叠长度分摊到各段落。
     """
+    seg_text = str(seg.get("text") or "")
     position = seg.get("position")
+    start = None
+    end = None
     if isinstance(position, (list, tuple)) and len(position) >= 2:
         try:
-            start, end = int(position[0]), int(position[1])
+            start = int(position[0])
+            end = start + max(int(position[1]), 0)
         except (TypeError, ValueError):
-            start, end = None, None
-        if start is not None and end > start:
-            overlaps = []
-            for begin, stop, para_idx in chunk.ranges:
-                overlap = min(end, stop) - max(start, begin)
-                if overlap > 0:
-                    overlaps.append((para_idx, overlap))
-            if overlaps:
-                return overlaps
+            start = None
+    if start is None and seg_text:
+        # 位置缺失时的兜底：直接在块内查找 segment 文本
+        start = chunk.text.find(seg_text)
+        end = start + len(seg_text) if start >= 0 else None
+    if start is not None and seg_text:
+        # 校验位置与文本一致，不一致则以文本查找为准
+        if chunk.text[start:start + len(seg_text)] != seg_text:
+            alt = chunk.text.find(seg_text)
+            if alt >= 0:
+                start, end = alt, alt + len(seg_text)
+    if start is not None and end is not None and end > start:
+        end = min(end, len(chunk.text))
+        overlaps = []
+        for begin, stop, para_idx in chunk.ranges:
+            overlap = min(end, stop) - max(start, begin)
+            if overlap > 0:
+                overlaps.append((para_idx, overlap))
+        if overlaps:
+            return overlaps
     # 无有效位置时退化为单段块直取
     if len(chunk.paragraph_indices) == 1:
         return [(chunk.paragraph_indices[0], 0)]

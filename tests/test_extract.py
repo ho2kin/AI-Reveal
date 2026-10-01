@@ -79,6 +79,32 @@ class TestSegment:
     def _paras(self, *texts):
         return [Paragraph(index=i, text=t, source="x") for i, t in enumerate(texts)]
 
+    def test_position_is_start_and_length(self):
+        """朱雀 position=[起始偏移, 长度]，块内各段都应拿到标注（回归测试）."""
+        from ai_reveal.detector import _map_segment
+        from ai_reveal.models import Chunk
+
+        chunk = Chunk(index=0, text="甲" * 10 + "\n\n" + "乙" * 10,
+                      paragraph_indices=[0, 1],
+                      ranges=[(0, 10, 0), (12, 22, 1)])
+        # 第二个 segment 起点 5 长度 20（旧实现会因 end<start 被丢弃）
+        seg = {"position": [5, 20], "label": 1, "conf": 0.9, "text": chunk.text[5:25]}
+        overlaps = dict(_map_segment(seg, chunk))
+        assert overlaps == {0: 5, 1: 10}
+        # 起点落在段间空隙时仍应映射到两侧段落
+        seg_gap = {"position": [9, 5], "label": 0, "conf": 0.5, "text": chunk.text[9:14]}
+        assert _map_segment(seg_gap, chunk)
+
+    def test_position_missing_falls_back_to_text(self):
+        from ai_reveal.detector import _map_segment
+        from ai_reveal.models import Chunk
+
+        chunk = Chunk(index=0, text="甲" * 10 + "\n\n" + "乙" * 10,
+                      paragraph_indices=[0, 1],
+                      ranges=[(0, 10, 0), (12, 22, 1)])
+        seg = {"position": None, "label": 1, "conf": 0.9, "text": "乙乙乙"}
+        assert dict(_map_segment(seg, chunk)) == {1: 3}
+
     def test_merges_within_limit(self):
         chunks = build_chunks(self._paras("段落一" * 100, "段落二" * 100), chunk_chars=1000)
         assert len(chunks) == 1
@@ -104,3 +130,33 @@ class TestSegment:
         pieces = _split_long_text("第一句。第二句。" * 3, 20)
         assert all(len(p) <= 20 for p in pieces)
         assert "".join(pieces).replace(" ", "") == "第一句。第二句。" * 3
+
+
+class TestQuota:
+    def test_record_and_summary(self, tmp_path, monkeypatch):
+        import ai_reveal.quota as quota
+        monkeypatch.setattr(quota, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(quota, "_STATE_FILE", tmp_path / "usage.json")
+        key = "sk-test-key-000"
+        before = quota.month_used_tokens(key)
+        total = quota.record_usage(key, 100)
+        assert total == before + 100
+        info = quota.summary_with_run(key, this_run_tokens=50) if hasattr(
+            quota, "summary_with_run") else quota.quota_summary(key, this_run_tokens=50)
+        assert info["used"] >= 150
+        assert info["remaining"] == info["free"] - info["used"]
+        assert 0 <= info["used_pct"] <= 100
+
+    def test_month_rollover(self, tmp_path, monkeypatch):
+        import ai_reveal.quota as quota
+        monkeypatch.setattr(quota, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(quota, "_STATE_FILE", tmp_path / "usage.json")
+        key = "sk-test-key-111"
+        quota.record_usage(key, 200)
+        # 模拟账本里是上个月的记录
+        import json
+        state = json.loads((tmp_path / "usage.json").read_text(encoding="utf-8"))
+        for entry in state.values():
+            entry["month"] = "2000-01"
+        (tmp_path / "usage.json").write_text(json.dumps(state), encoding="utf-8")
+        assert quota.month_used_tokens(key) == 0

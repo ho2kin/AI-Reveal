@@ -18,6 +18,7 @@ from ai_reveal.models import (
     Paragraph,
 )
 from ai_reveal.pdf_extract import extract_pdf
+from ai_reveal.quota import quota_summary, record_usage
 from ai_reveal.report import write_reports
 from ai_reveal.segment import build_chunks
 from ai_reveal.tex_extract import extract_tex
@@ -97,7 +98,14 @@ def main(argv: list[str] | None = None) -> int:
         print("\n--dry-run 模式：前 5 个段落预览 ——")
         for para in paragraphs[:5]:
             print(f"  [{para.kind}] {para.text[:80]}{'…' if len(para.text) > 80 else ''}")
-        print("\n未调用任何 API。确认提取质量后可去掉 --dry-run 执行检测。")
+        try:
+            api_key = load_api_key(args.api_key)
+            info = quota_summary(api_key)
+            print(f"\n未调用任何 API。本月额度: 已用 {info['used']:,} / "
+                  f"{info['free']:,} ({info['used_pct']:.2f}%) · 剩余 {info['remaining']:,}")
+        except MissingApiKeyError:
+            print("\n未调用任何 API。")
+        print("确认提取质量后可去掉 --dry-run 执行检测。")
         return 0
 
     try:
@@ -122,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
         print("  jev 复核中……")
         JevAdvisor(api_key, timeout=args.timeout).run(report)
 
+    # 累计进本地额度账本并汇总额度信息（供终端与报告展示）
+    record_usage(api_key, report.makers_tokens)
+    report.extras["quota"] = quota_summary(api_key)
+
     _print_summary(report)
     json_path, html_path = write_reports(report, Path(args.output))
     print(f"\n报告已生成：\n  {json_path.resolve()}\n  {html_path.resolve()}")
@@ -136,6 +148,11 @@ def _print_summary(report: DetectionReport) -> None:
           f"人工: {report.human_ratio * 100:.1f}%")
     print(f"token 消耗: 朱雀 {report.zhuque_tokens} | "
           f"Makers 计费 {report.makers_tokens} | jev {report.jev_tokens}")
+    quota = report.extras.get("quota")
+    if quota:
+        print(f"本月额度: 已用 {quota['used']:,} / {quota['free']:,} "
+              f"({quota['used_pct']:.2f}%) · 剩余 {quota['remaining']:,} "
+              f"({100 - quota['used_pct']:.2f}%)")
 
     flagged = [r for r in report.paragraphs
                if r.label in (LABEL_AI, LABEL_SUSPECTED)]

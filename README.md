@@ -60,7 +60,17 @@ ai-reveal detect paper.tex -o my-report        # 指定报告输出目录
 | `--dry-run` | 只提取与分段，不消耗 token |
 | `-o DIR` | 报告输出目录，默认 `./ai-reveal-report` |
 
-输出：终端打印总 AI 率 / 疑似率、token 消耗、Top 可疑段落摘要与报告路径。
+输出：终端打印总 AI 率 / 疑似率、token 消耗、本月剩余额度、Top 可疑段落摘要与报告路径。
+
+## 额度显示
+
+网关未提供额度查询接口，工具按 API Key 在本地累计每月的 Makers 计费 token
+（账本存于 `~/.ai-reveal/usage.json`，月底或换 Key 自动重置），结合每月免费
+额度（默认 50 万 token）计算已用/剩余/百分比。如额度不同可通过环境变量覆盖：
+
+```bash
+set AI_REVEAL_MONTHLY_TOKENS=1000000   # PowerShell 示例
+```
 
 ## 局限与说明
 
