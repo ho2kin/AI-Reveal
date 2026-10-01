@@ -25,7 +25,7 @@ class TestTexExtract:
         text = all_text(extracted)
         assert "联邦学习允许各方在不共享原始数据" in text  # 来自 \input 展开文件
         assert "本文提出一种基于边缘计算的联邦学习" in text  # abstract
-        assert "如公式所示" in text  # 行内公式之后的正文
+        assert "如式 (1)所示" in text or "损失函数由各样本损失累加而成" in text  # 公式后的正文
         assert "补充实验结果表明各组件均有效" in text  # 参考文献后的附录应保留
 
     def test_drops_comments(self, extracted):
@@ -38,6 +38,16 @@ class TestTexExtract:
         assert "documentclass" not in text
         assert "usepackage" not in text
         assert "基于边缘计算的联邦学习优化方法研究" not in text  # \title 被丢弃
+
+    def test_restores_references_citations_and_math(self, extracted):
+        """交叉引用/文献引用/行内公式应还原为可读内容，而非删除留残句."""
+        text = all_text(extracted)
+        assert "如式 (1)所示" in text  # \eqref{eq:loss}（~ 为不换行空格，忠实还原）
+        assert "Figure 1" in text  # \autoref{fig:arch}
+        assert "第 1节" in text  # 第~\ref{sec:intro}节
+        assert "[1]" in text and "[2]" in text and "[3]" in text  # \cite 按首次出现编号
+        assert "其中 n 为样本数量" in text  # 行内数学 $n$
+        assert "γ" in text  # $\gamma$ 经 Unicode 还原
 
     def test_drops_math(self, extracted):
         text = all_text(extracted)
@@ -130,6 +140,67 @@ class TestSegment:
         pieces = _split_long_text("第一句。第二句。" * 3, 20)
         assert all(len(p) <= 20 for p in pieces)
         assert "".join(pieces).replace(" ", "") == "第一句。第二句。" * 3
+
+
+class TestConsolidate:
+    def _para(self, text, kind="body", **kw):
+        return Paragraph(index=0, text=text, source="x", kind=kind, **kw)
+
+    def test_headings_become_sections_not_units(self):
+        from ai_reveal.segment import consolidate
+        paras = [
+            self._para("引言", kind="heading"),
+            self._para("长正文" * 60),
+            self._para("方法", kind="heading"),
+            self._para("长方法" * 60),
+        ]
+        out = consolidate(paras)
+        assert all(p.kind != "heading" for p in out)  # 标题不作为检测单元
+        assert [p.section for p in out] == ["引言", "方法"]
+        assert len(out) == 2 and out[0].index == 0 and out[1].index == 1
+
+    def test_short_merged_into_next(self):
+        from ai_reveal.segment import consolidate
+        out = consolidate([self._para("短引句："), self._para("长" * 130)])
+        assert len(out) == 1
+        assert out[0].text.startswith("短引句： 长")
+
+    def test_chain_merge_until_long_enough(self):
+        from ai_reveal.segment import consolidate
+        out = consolidate([
+            self._para("碎片一"), self._para("碎片二"), self._para("长" * 130),
+        ])
+        assert len(out) == 1  # 连续碎片链式合并到足够长
+
+    def test_trailing_short_merges_backward(self):
+        from ai_reveal.segment import consolidate
+        out = consolidate([self._para("长" * 130), self._para("结尾碎片")])
+        assert len(out) == 1
+
+    def test_caption_blocks_merging(self):
+        from ai_reveal.segment import consolidate
+        out = consolidate([
+            self._para("长" * 130), self._para("图注", kind="caption"), self._para("长" * 130),
+        ])
+        assert len(out) == 3  # 图注独立，两侧正文不跨它合并
+        assert out[1].kind == "caption"
+
+    def test_lone_short_paragraph_kept(self):
+        from ai_reveal.segment import consolidate
+        out = consolidate([
+            self._para("甲节", kind="heading"), self._para("独短段"),
+            self._para("乙节", kind="heading"), self._para("长" * 130),
+        ])
+        assert len(out) == 2  # 节内无邻居的短段落保持原样
+        assert out[0].text == "独短段"
+
+    def test_duplicate_headings_do_not_merge_across(self):
+        from ai_reveal.segment import consolidate
+        out = consolidate([
+            self._para("讨论", kind="heading"), self._para("长" * 130),
+            self._para("讨论", kind="heading"), self._para("另一段" * 60),
+        ])
+        assert len(out) == 2  # 重名章节之间不跨节合并
 
 
 class TestQuota:

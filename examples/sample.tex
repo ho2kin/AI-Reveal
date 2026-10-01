@@ -23,7 +23,7 @@
   \label{fig:arch}
 \end{figure}
 
-本文的主要贡献如下：
+本文的主要贡献如下（系统总体架构如\autoref{fig:arch}所示）：
 \begin{itemize}
   \item 第一项贡献是提出了新的梯度聚合策略。
   \item 第二项贡献是完整的实验评估与消融分析。
@@ -31,12 +31,13 @@
 
 \begin{equation}
   \mathcal{L} = \sum_{i=1}^{n} \ell(f(x_i), y_i)
+  \label{eq:loss}
 \end{equation}
 
-如公式所示，损失函数由各样本损失累加而成，其中 $n$ 为样本数量。
+如式~\eqref{eq:loss}所示，损失函数由各样本损失累加而成，其中 $n$ 为样本数量，折扣因子 $\gamma\in(0,1)$ 控制收敛速度。
 
 \section{结论}
-本文验证了所提方法的有效性，未来将探索更大规模的分布式场景。
+如第~\ref{sec:intro}节所述，本文验证了所提方法的有效性，未来将探索更大规模的分布式场景。
 
 \section*{参考文献}
 \bibliographystyle{plain}

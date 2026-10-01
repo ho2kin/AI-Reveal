@@ -20,7 +20,7 @@ from ai_reveal.models import (
 from ai_reveal.pdf_extract import extract_pdf
 from ai_reveal.quota import quota_summary, record_usage
 from ai_reveal.report import write_reports
-from ai_reveal.segment import build_chunks
+from ai_reveal.segment import build_chunks, consolidate
 from ai_reveal.tex_extract import extract_tex
 
 
@@ -37,6 +37,8 @@ def _build_parser() -> argparse.ArgumentParser:
     detect.add_argument("--api-key", help="覆盖环境变量 / .env 中的 API Key")
     detect.add_argument("--chunk-chars", type=int, default=4000,
                         help="单次请求文本块大小（默认 4000 字符）")
+    detect.add_argument("--min-para-chars", type=int, default=120,
+                        help="低于该长度的段落与同章节相邻段落合并（默认 120，0 关闭合并）")
     detect.add_argument("--include-captions", action="store_true",
                         help="保留图表标题（默认丢弃浮动体）")
     detect.add_argument("--keep-references", action="store_true",
@@ -86,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  警告: {w}", file=sys.stderr)
         return 2
 
+    if args.min_para_chars > 0:
+        paragraphs = consolidate(paragraphs, min_chars=args.min_para_chars)
     chunks = build_chunks(paragraphs, chunk_chars=max(args.chunk_chars, 200))
     total_chars = sum(len(p.text) for p in paragraphs)
 

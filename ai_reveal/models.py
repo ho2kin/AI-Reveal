@@ -24,7 +24,8 @@ class Paragraph:
     index: int
     text: str
     source: str  # 来源文件（tex 路径或 pdf 页码区间）
-    kind: str = "body"  # body / heading / abstract / caption
+    kind: str = "body"  # body / abstract / caption
+    section: str = ""  # 所属章节标题（标题本身不作为检测单元）
 
 
 @dataclass

@@ -54,6 +54,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .badge.none { background:var(--gray-bg); color:var(--gray); }
   .para { background:#fff; border:1px solid var(--line); border-left:5px solid var(--gray-bg);
           border-radius:10px; padding:14px 18px; margin-bottom:12px; }
+  h2.sec { font-size:15px; margin:22px 0 10px; padding-left:10px; border-left:4px solid #94a3b8;
+           color:#475569; }
   .para.ai { border-left-color:var(--red); }
   .para.suspected { border-left-color:var(--yellow); }
   .para.human { border-left-color:var(--green); }
@@ -84,6 +86,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <div class="legend">图例：<span class="badge ai">AI</span><span class="badge suspected">疑似AI</span><span class="badge human">人工</span><span class="badge none">未检测</span></div>
 
   {% for p in paragraphs %}
+  {% if p.new_section %}<h2 class="sec">{{ p.section }}</h2>{% endif %}
   <article class="para {{ p.cls }}">
     <div class="phead">
       <span class="badge {{ p.cls }}">{{ p.label_name }}</span>
@@ -145,9 +148,12 @@ def _json_payload(report: DetectionReport) -> dict:
 
 def _html_view(report: DetectionReport) -> dict:
     paragraphs = []
+    prev_section = None
     for result in report.paragraphs:
         para = result.paragraph
         cls = _LABEL_CLASSES.get(result.label, "none") if result.label is not None else "none"
+        new_section = (para.section != prev_section and bool(para.section))
+        prev_section = para.section
         review = result.review
         review_badge = review_cls = ""
         reason = suggestion = review_error = ""
@@ -163,6 +169,8 @@ def _html_view(report: DetectionReport) -> dict:
             "source": para.source,
             "kind": para.kind,
             "kind_name": _KIND_NAMES.get(para.kind, para.kind),
+            "section": para.section,
+            "new_section": new_section,
             "text": para.text,
             "cls": cls,
             "label_name": _LABEL_NAMES.get(result.label, "未检测") if result.label is not None else "未检测",

@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pylatexenc.latex2text import LatexNodes2Text
 from pylatexenc.latexwalker import (
     LatexCharsNode,
     LatexCommentNode,
@@ -25,6 +26,29 @@ from pylatexenc.latexwalker import (
 
 from ai_reveal.models import Paragraph
 
+# 交叉引用宏：还原为编号/编号文本，而不是删除
+_REF_MACROS = {"ref", "pageref", "eqref", "autoref", "cref", "Cref", "vref", "subref"}
+# 文献引用宏：还原为 [1] 式编号
+_CITE_MACROS = {"cite", "citep", "citet", "citealp", "citealt",
+                "citeauthor", "citeyear", "citeyearpar"}
+# 引用标签前缀 → 编号时的英文单词（\autoref 等使用）
+_REF_WORDS = {
+    "fig": "Figure", "tab": "Table", "eq": "Equation", "sec": "Section",
+    "subsec": "Section", "chap": "Chapter", "alg": "Algorithm",
+    "lst": "Listing", "app": "Appendix", "def": "Definition",
+    "thm": "Theorem", "lem": "Lemma", "prop": "Proposition",
+}
+# 有固定文本表示的宏
+_SPECIAL_TEXT = {
+    "ldots": "…", "dots": "…", "LaTeX": "LaTeX", "TeX": "TeX", "BibTeX": "BibTeX",
+    "textendash": "–", "textemdash": "—", "textbackslash": "\\",
+    "textquotedblleft": "“", "textquotedblright": "”",
+    "textquoteleft": "‘", "textquoteright": "’",
+    "newline": " ", "linebreak": " ", "enspace": " ", "quad": " ", "qquad": "  ",
+    "null": "", "nobreakspace": " ",
+}
+# specials 节点（~ -- --- 等）的文本表示
+_SPECIALS_TEXT = {"~": " ", "--": "–", "---": "—", "\\ ": " ", "\\\\": " "}
 # 包裹正文文字、需要递归提取参数内容的宏
 _PROSE_MACROS = {
     "text", "textbf", "textit", "textem", "emph", "textrm", "textsf",
@@ -33,10 +57,9 @@ _PROSE_MACROS = {
 }
 # 只递归第一个花括号参数（其余参数是备用文本，避免重复）
 _FIRST_ARG_MACROS = {"texorpdfstring"}
-# 直接丢弃的宏：引用、标注、排版控制、元信息等
+# 直接丢弃的宏：标注、排版控制、元信息等
 _DROP_MACROS = {
-    "cite", "citep", "citet", "citealp", "citeauthor", "citeyear", "nocite",
-    "ref", "eqref", "autoref", "pageref", "cref", "Cref", "label",
+    "nocite", "label",
     "bibliographystyle", "bibliography", "printbibliography", "bibitem",
     "usepackage", "documentclass", "includegraphics", "graphicspath",
     "hspace", "vspace", "vskip", "vfill", "hfill", "newpage", "clearpage",
@@ -49,7 +72,7 @@ _DROP_MACROS = {
     "appendix", "appendices", "backmatter", "frontmatter", "mainmatter",
     "parskip", "tabularnewline", "arraybackslash", "relax", "protect",
     "small", "large", "Large", "LARGE", "huge", "Huge", "normalsize",
-    "footnotesize", "scriptsize", "tiny", "begin", "end", "par",
+    "footnotesize", "scriptsize", "tiny", "begin", "end",
     "bibentry", "nobibliography",
 }
 # 章节标题宏：提取参数文本作为标题段落
@@ -212,6 +235,10 @@ def _cut_references(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _normalize(s: str) -> str:
+    s = re.sub(r"``", "“", s)
+    s = re.sub(r"''", "”", s)
+    s = re.sub(r"(?<=[\w.,])---(?=[\w.,])", "—", s)
+    s = re.sub(r"(?<=[\w.,])--(?=[\w.,])", "–", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -221,14 +248,42 @@ def _is_useful(text: str) -> bool:
     return bool(_CJK_RE.search(text) or _WORD_RE.search(text))
 
 
+_MATH2TEXT = LatexNodes2Text()
+
+
+def _math_to_text(node) -> str:
+    """把行内数学节点还原为可读文本（γ、H_count 等）；过长的公式串视为展示公式跳过."""
+    try:
+        text = _normalize(_MATH2TEXT.nodelist_to_text(node.nodelist))
+    except Exception:
+        return ""
+    if text and len(text) <= 60:
+        return text
+    return ""
+
+
+def _ref_word(label: str) -> str:
+    prefix = re.split(r"[^A-Za-z]", label)[0].lower() if label else ""
+    return _REF_WORDS.get(prefix, "Reference")
+
+
 class _BlockEmitter:
-    """把语法树遍历为 (kind, text) 块序列。kind: body/heading/abstract/caption."""
+    """把语法树遍历为 (kind, text) 块序列。kind: body/heading/abstract/caption.
+
+    交叉引用与文献引用按出现顺序还原为编号（如同编译输出），
+    行内公式还原为 Unicode 文本，避免留下 “Fig. .” 式的残句。
+    """
 
     def __init__(self, include_captions: bool = False):
         self.blocks: list[tuple[str, str]] = []
         self.include_captions = include_captions
         self._buf: list[str] = []
         self._kind = "body"
+        # 编号状态（子提取器通过 _share_state 共享同一批 dict）
+        self._prefix_counters: dict[str, int] = {}
+        self._label_nums: dict[str, int] = {}
+        self._cite_nums: dict[str, int] = {}
+        self._cite_counter = 0
 
     # -- 对外 --
     def walk(self, node) -> None:
@@ -240,9 +295,10 @@ class _BlockEmitter:
             for child in node.nodelist:
                 self.walk(child)
         elif isinstance(node, LatexMathNode):
-            pass  # 数学公式不参与检测
+            self._buf.append(_math_to_text(node))
         elif isinstance(node, LatexSpecialsNode):
-            self._buf.append(" ")
+            self._buf.append(_SPECIALS_TEXT.get(
+                getattr(node, "specials_chars", "") or "", " "))
         elif isinstance(node, LatexMacroNode):
             self._walk_macro(node)
         elif isinstance(node, LatexEnvironmentNode):
@@ -271,7 +327,19 @@ class _BlockEmitter:
                 if cap:
                     self.blocks.append(("caption", cap))
             return
+        if name in _REF_MACROS:
+            self._emit_ref(name, args)
+            return
+        if name in _CITE_MACROS:
+            self._emit_cite(name, args)
+            return
+        if name in _SPECIAL_TEXT:
+            self._buf.append(_SPECIAL_TEXT[name])
+            return
         if name in _DROP_MACROS:
+            return
+        if name in ("\\", "par"):
+            self.flush()
             return
         if name in _FIRST_ARG_MACROS:
             if args:
@@ -289,6 +357,55 @@ class _BlockEmitter:
             self.flush()
             return
         # 其他未知宏：丢弃宏名本身，其后的参数组会作为独立 Group 节点被正常递归
+
+    def _emit_ref(self, name: str, args: list) -> None:
+        """交叉引用还原为编号：Fig.~\\ref{fig:a} → Fig. 1，\\eqref → (1)，\\autoref → Figure 1."""
+        if not args:
+            return
+        label = self._extract_text(args[-1])
+        if not label:
+            return
+        num = self._num_for(label)
+        if name == "eqref":
+            self._buf.append(f"({num})")
+        elif name in ("autoref", "cref", "Cref", "vref"):
+            self._buf.append(f"{_ref_word(label)} {num}")
+        else:  # ref / pageref / subref：通常前面已写 Fig./Table 等字样，只补编号
+            self._buf.append(str(num))
+
+    def _emit_cite(self, name: str, args: list) -> None:
+        """文献引用还原为 [1] / [1, 2] 式编号（按首次出现顺序）."""
+        if not args:
+            return
+        keys_text = self._extract_text(args[-1])
+        keys = [k.strip() for k in keys_text.split(",") if k.strip()]
+        if not keys:
+            return
+        nums = []
+        for key in keys:
+            if key not in self._cite_nums:
+                self._cite_counter += 1
+                self._cite_nums[key] = self._cite_counter
+            nums.append(str(self._cite_nums[key]))
+        if name in ("citeyear", "citeyearpar"):
+            self._buf.append(", ".join(nums))
+        else:
+            self._buf.append("[" + ", ".join(nums) + "]")
+
+    def _num_for(self, label: str) -> int:
+        if label not in self._label_nums:
+            prefix = re.split(r"[^A-Za-z]", label)[0].lower() if label else "ref"
+            counter = self._prefix_counters.get(prefix, 0) + 1
+            self._prefix_counters[prefix] = counter
+            self._label_nums[label] = counter
+        return self._label_nums[label]
+
+    def _share_state(self, other: "_BlockEmitter") -> None:
+        """子提取器共享编号状态（dict 按引用共享，计数器先继承后同步）."""
+        self._prefix_counters = other._prefix_counters
+        self._label_nums = other._label_nums
+        self._cite_nums = other._cite_nums
+        self._cite_counter = other._cite_counter
 
     @staticmethod
     def _arg_nodes(node: LatexMacroNode) -> list:
@@ -353,13 +470,16 @@ class _BlockEmitter:
             self.blocks.append((self._kind, text))
 
     def _extract_text(self, node) -> str:
-        """把单个参数节点提取为纯文本（用于标题/caption）."""
+        """把单个参数节点提取为纯文本（用于标题/caption/引用标签）."""
         if node is None:
             return ""
         sub = _BlockEmitter(include_captions=self.include_captions)
+        sub._share_state(self)
         sub.walk(node)
         sub.finish()
+        self._cite_counter = sub._cite_counter
         return _normalize(" ".join(t for _, t in sub.blocks))
+
 
 
 # ---------------------------------------------------------------------------
