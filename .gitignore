@@ -1,0 +1,22 @@
+# 密钥与本地配置
+.env
+
+# 报告输出
+ai-reveal-report/
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# IDE / 系统
+.idea/
+.vscode/
+.zcode/
+.DS_Store
+Thumbs.db

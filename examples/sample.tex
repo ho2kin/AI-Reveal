@@ -1,0 +1,48 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath,graphicx}
+\title{基于边缘计算的联邦学习优化方法研究}
+\author{张三}
+\date{2026年10月}
+
+\begin{document}
+\maketitle
+
+% 这是注释，不应出现在检测结果中
+\begin{abstract}
+本文提出一种基于边缘计算的联邦学习优化方法。实验表明该方法在多个公开数据集上均取得了稳定的性能提升，同时将通信开销降低了约百分之三十。
+\end{abstract}
+
+\section{引言}\label{sec:intro}
+近年来，随着人工智能技术的快速发展\cite{vaswani2017}，深度学习在自然语言处理领域取得了显著进展。然而在数据隐私敏感的场景下，集中式训练面临较大挑战。
+\input{sections/background}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.8\textwidth]{arch.pdf}
+  \caption{系统总体架构图。}
+  \label{fig:arch}
+\end{figure}
+
+本文的主要贡献如下：
+\begin{itemize}
+  \item 第一项贡献是提出了新的梯度聚合策略。
+  \item 第二项贡献是完整的实验评估与消融分析。
+\end{itemize}
+
+\begin{equation}
+  \mathcal{L} = \sum_{i=1}^{n} \ell(f(x_i), y_i)
+\end{equation}
+
+如公式所示，损失函数由各样本损失累加而成，其中 $n$ 为样本数量。
+
+\section{结论}
+本文验证了所提方法的有效性，未来将探索更大规模的分布式场景。
+
+\section*{参考文献}
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\appendix
+\section{附录A：补充实验}
+补充实验结果表明各组件均有效，超参数敏感性分析见下表。
+\end{document}
